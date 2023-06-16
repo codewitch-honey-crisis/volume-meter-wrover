@@ -1,14 +1,9 @@
 #include <Arduino.h>
 #include <SPIFFS.h>
-
+#define LCD_IMPLEMENTATION
+#include <lcd_init.h>
 #include <Audio.hpp>
-#include <gfx.hpp>
-#ifdef T_QT_PRO
-#include <st7789.hpp>
-#endif
-#ifdef ESP_WROVER_KIT
-#include <ili9341.hpp>
-#endif
+#include <uix.hpp>
 // #include "NotoSans_Bold.hpp"
 #include "Telegrama.hpp"
 
@@ -29,8 +24,8 @@
 
 #define LCD_WIDTH 320
 #define LCD_HEIGHT 240
-#define LCD_ROTATION 0
-#define LCD_HOST SPI1_HOST
+#define LCD_ROTATION 1
+#define LCD_HOST HSPI
 
 #define PIN_NUM_CS 22
 #define PIN_NUM_MOSI 23
@@ -40,52 +35,71 @@
 #define PIN_NUM_RST 18
 #define PIN_NUM_BCKL 5
 
-using namespace arduino;
 using namespace gfx;
+using namespace uix;
+using lcd_color = color<rgb_pixel<16>>;
+using color32_t = color<rgba_pixel<32>>;
 
-using bus_type =
-    tft_spi_ex<LCD_HOST, PIN_NUM_CS, PIN_NUM_MOSI, PIN_NUM_MISO, PIN_NUM_CLK,
-               SPI_MODE0, LCD_WIDTH * LCD_HEIGHT * 2 + 8>;
-#ifdef T_QT_PRO
-using lcd_type = st7789<LCD_WIDTH, LCD_HEIGHT, PIN_NUM_DC, PIN_NUM_RST, -1,
-                        bus_type, LCD_ROTATION, false, 400, 200>;
-#endif
-#ifdef ESP_WROVER_KIT
-using lcd_type = ili9341< PIN_NUM_DC, PIN_NUM_RST, -1,
-                        bus_type, LCD_ROTATION, false, 400, 200>;
-#endif
-using lcd_color = color<typename lcd_type::pixel_type>;
+constexpr static const size_t lcd_buffer_size = 32*1024;
+static uint8_t lcd_buffer1[lcd_buffer_size];
+static uint8_t lcd_buffer2[lcd_buffer_size];
 
-lcd_type lcd;
+using screen_t = screen<LCD_WIDTH,LCD_HEIGHT,rgb_pixel<LCD_BIT_DEPTH>>;
+using label_t = label<screen_t::control_surface_type>;
+static screen_t main_screen(lcd_buffer_size,lcd_buffer1,lcd_buffer2);
+static label_t db_label(main_screen);
+static char text_buffer[12];
+static Audio audio = Audio();
 
-using bmp_type = bitmap<decltype(lcd)::pixel_type>;
-using bmp_color = color<typename bmp_type::pixel_type>;
+static double decibelAccum = 0;
 
-Audio audio = Audio();
+constexpr static const uint8_t red_hue = 0;
+constexpr static const uint8_t green_hue = 128 - 32;
+static bool lcd_flush_ready(esp_lcd_panel_io_handle_t panel_io, 
+                            esp_lcd_panel_io_event_data_t* edata, 
+                            void* user_ctx) {
+    main_screen.set_flush_complete();
+    return true;
+}
 
-double decibelAccum = 0;
-
-const uint8_t red_hue = 0;
-const uint8_t green_hue = 128 - 32;
+void uix_flush(const rect16& bounds, const void* bmp, void* state) {
+  lcd_panel_draw_bitmap(bounds.x1, 
+                          bounds.y1, 
+                          bounds.x2, 
+                          bounds.y2,
+                          (void*) bmp);
+}
 
 void setup() {
   Serial.begin(115200);
-
   // override backlight control (active LOW)
   pinMode(PIN_NUM_BCKL, OUTPUT);
   digitalWrite(PIN_NUM_BCKL, LOW);
 
+  // set up the UI
+  main_screen.on_flush_callback(uix_flush);
+  main_screen.background_color(lcd_color::black);
+  db_label.text_justify(uix_justify::center);
+  db_label.bounds(main_screen.bounds());
+  db_label.text_open_font(&Telegrama);
+  db_label.text_line_height(64);
+  db_label.background_color(color32_t::black);
+  db_label.border_color(db_label.background_color());
+  db_label.text_color(color32_t::white);
+  main_screen.register_control(db_label);
   // set up display
-  lcd.initialize();
+  lcd_panel_init(lcd_buffer_size,lcd_flush_ready);
+
+  
 
   // start microphone task loop
-  audio.begin();
+  //audio.begin();
 }
 
 void loop() {
   // check if we have audio data
-  double db = audio.getDecibels();
-
+  //double db = audio.getDecibels();
+  double db=1;
   if (db == 0) {
     return;
   }
@@ -100,25 +114,11 @@ void loop() {
   color_hsv.channel<channel_name::S>(255);
   color_hsv.channel<channel_name::V>(255);
 
-  auto color = rgb_pixel<16>();
+  typename screen_t::pixel_type color;
 
-  convert<hsv_pixel<24>, rgb_pixel<16>>(color_hsv, &color);
-
-  char buffer[12];
-
-  sprintf(buffer, "%.0f", decibelAccum);
-
-  open_text_info oti;
-  oti.font = &Telegrama;
-  oti.scale = Telegrama.scale(64);
-  oti.text = buffer;
-
-  auto text_size = Telegrama.measure_text((ssize16)lcd.bounds().dimensions(),
-                                          spoint16(0, 0), oti.text, oti.scale);
-
-  auto text_pos = text_size.bounds().center((srect16)lcd.bounds());
-
-  draw::filled_rectangle(lcd, lcd.bounds(), color);
-  draw::text(lcd, text_pos, oti, lcd_color::black, color);
-  vTaskDelay(5);
+  convert<hsv_pixel<24>, screen_t::pixel_type>(color_hsv, &color);
+  main_screen.background_color(color);
+  sprintf(text_buffer, "%.0f", decibelAccum);
+  db_label.text(text_buffer);
+  main_screen.update();
 }
