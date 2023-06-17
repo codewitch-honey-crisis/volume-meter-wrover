@@ -65,7 +65,7 @@ using lcd_t = ili9341<LCD_PIN_NUM_DC,LCD_PIN_NUM_RST,LCD_PIN_NUM_BCKL,bus_t,LCD_
 
 lcd_t lcd;
 
-constexpr static const size_t lcd_buffer_size = 32*1024;
+constexpr static const size_t lcd_buffer_size = 48*1024;
 static uint8_t lcd_buffer1[lcd_buffer_size];
 static uint8_t lcd_buffer2[lcd_buffer_size];
 
@@ -116,7 +116,7 @@ void setup() {
 
 void loop() {
   // check if we have audio data
-  double db = rand()%10;//audio.getDecibels();
+  double db = (rand()%120);//audio.getDecibels();
   if (db == 0) {
     return;
   }
